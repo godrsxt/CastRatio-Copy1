@@ -5,15 +5,15 @@ plugins {
 }
 
 android {
-    namespace = "com.castratio.app"
+    namespace = "com.example.castratio"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.castratio.app"
+        applicationId = "com.example.castratio"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "1.1"
+        versionName = "1.0"
     }
 
     buildTypes {
@@ -45,8 +45,8 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.09.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
-
-    // ExoPlayer for advanced media playback + track selection
-    implementation("com.google.android.exoplayer:exoplayer:2.19.1")
-    implementation("com.google.android.exoplayer:exoplayer-ui:2.19.1")
+    
+    // Media3 for Video Playback on the TV
+    implementation("androidx.media3:media3-exoplayer:1.4.0")
+    implementation("androidx.media3:media3-ui:1.4.0")
 }
