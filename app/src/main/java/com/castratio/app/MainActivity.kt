@@ -9,10 +9,8 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.Display
 import android.view.ViewGroup
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -22,28 +20,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.google.android.exoplayer2.ExoPlayer
-import com.google.android.exoplayer2.MediaItem
-import com.google.android.exoplayer2.trackselection.DefaultTrackSelector
-import com.google.android.exoplayer2.ui.PlayerView
-import com.google.android.exoplayer2.util.MimeTypes
+
+// Correct Jetpack Media3 Imports (Replaces com.google.android.exoplayer2)
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.flow.MutableStateFlow
 
-// Global states
+// Global state to share the chosen aspect ratio with the TV Screen
 val aspectRatioState = MutableStateFlow(16f / 9f)
-val currentVideoUriState = MutableStateFlow<Uri?>(null)
 
 class MainActivity : ComponentActivity() {
     private var currentPresentation: CastPresentation? = null
-    private val pickVideoLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        uri?.let {
-            currentVideoUriState.value = it
-            Toast.makeText(this, "Video selected. Playing on TV...", Toast.LENGTH_SHORT).show()
-        }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,8 +43,7 @@ class MainActivity : ComponentActivity() {
                 MainScreen(
                     onOpenCastSettings = {
                         startActivity(Intent(Settings.ACTION_CAST_SETTINGS))
-                    },
-                    onPickVideo = { pickVideoLauncher.launch("video/*") }
+                    }
                 )
             }
         }
@@ -89,46 +79,38 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        currentPresentation?.releasePlayer()
         currentPresentation?.dismiss()
         currentPresentation = null
     }
 }
 
 @Composable
-fun MainScreen(
-    onOpenCastSettings: () -> Unit,
-    onPickVideo: () -> Unit
-) {
+fun MainScreen(onOpenCastSettings: () -> Unit) {
     var currentRatio by remember { mutableStateOf(16f / 9f) }
 
     LaunchedEffect(currentRatio) {
         aspectRatioState.value = currentRatio
     }
 
-    val context = LocalContext.current
-
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(24.dp)
+        verticalArrangement = Arrangement.Center
     ) {
-        Text("CastRatio Player", style = MaterialTheme.typography.headlineSmall)
+        Text("Anycast Ratio Controller", style = MaterialTheme.typography.headlineSmall)
+        
+        Spacer(modifier = Modifier.height(48.dp))
 
         Button(onClick = onOpenCastSettings, modifier = Modifier.fillMaxWidth().height(60.dp)) {
             Text("1. Connect to Anycast")
         }
 
-        Button(
-            onClick = onPickVideo,
-            modifier = Modifier.fillMaxWidth().height(60.dp)
-        ) {
-            Text("2. Pick Video from Storage")
-        }
+        Spacer(modifier = Modifier.height(48.dp))
+        Text("2. Set TV Aspect Ratio:", style = MaterialTheme.typography.bodyLarge)
+        Spacer(modifier = Modifier.height(16.dp))
 
-        Text("3. Set Fallback Aspect Ratio:", style = MaterialTheme.typography.bodyLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = { currentRatio = 16f / 9f }) { Text("16:9") }
             Button(onClick = { currentRatio = 4f / 3f }) { Text("4:3") }
@@ -138,82 +120,65 @@ fun MainScreen(
 }
 
 class CastPresentation(context: Context, display: Display) : Presentation(context, display) {
-    private var player: ExoPlayer? = null
-
-    fun releasePlayer() {
-        player?.release()
-        player = null
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         val composeView = ComposeView(context).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setContent {
-                val videoUri by currentVideoUriState.collectAsState()
-
+                val ratio by aspectRatioState.collectAsState()
+                
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black),
+                    modifier = Modifier.fillMaxSize().background(Color.Black),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (videoUri != null) {
-                        AndroidView(
-                            factory = { ctx ->
-                                val trackSelector = DefaultTrackSelector(ctx)
-                                player = ExoPlayer.Builder(ctx)
-                                    .setTrackSelector(trackSelector)
-                                    .build()
-
-                                PlayerView(ctx).apply {
-                                    this.player = player
-                                    useController = true
-                                    // hideControllerTimeoutMs removed for compatibility; use default
-
-                                    val mediaItem = MediaItem.Builder()
-                                        .setUri(videoUri.toString())
-                                        .build()
-
-                                    player?.setMediaItem(mediaItem)
-                                    player?.prepare()
-                                    player?.playWhenReady = true
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
+                    Box(
+                        modifier = Modifier
+                            .aspectRatio(ratio)
+                            .fillMaxSize()
+                            .background(Color.Black),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CastVideoPlayer(
+                            videoUri = Uri.parse("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4")
                         )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .aspectRatio(aspectRatioState.collectAsState().value)
-                                .fillMaxSize()
-                                .background(Color.DarkGray),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                "CastRatio Player\nPick a video on phone",
-                                color = Color.White,
-                                textAlign = TextAlign.Center
-                            )
-                        }
                     }
                 }
             }
         }
         setContentView(composeView)
     }
+}
 
-    override fun onStop() {
-        player?.playWhenReady = false
-        super.onStop()
+@Composable
+fun CastVideoPlayer(videoUri: Uri) {
+    val context = LocalContext.current
+    
+    // Modern Media3 initialization
+    val exoPlayer = remember {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(videoUri))
+            prepare()
+            playWhenReady = true
+            repeatMode = Player.REPEAT_MODE_ALL
+        }
     }
 
-    override fun onDetachedFromWindow() {
-        releasePlayer()
-        super.onDetachedFromWindow()
+    DisposableEffect(Unit) {
+        onDispose {
+            exoPlayer.release()
+        }
     }
+
+    AndroidView(
+        factory = {
+            PlayerView(context).apply {
+                player = exoPlayer
+                useController = false 
+            }
+        },
+        modifier = Modifier.fillMaxSize()
+    )
 }
