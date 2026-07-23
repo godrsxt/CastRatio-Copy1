@@ -1,15 +1,18 @@
-package com.example.castratio
+package com.castratio.app
 
 import android.app.Presentation
 import android.content.Context
 import android.content.Intent
 import android.hardware.display.DisplayManager
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Display
 import android.view.ViewGroup
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -18,15 +21,29 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.flow.MutableStateFlow
+import androidx.compose.ui.viewinterop.AndroidView
+import com.google.android.exoplayer2.ExoPlayer
+import com.google.android.exoplayer2.MediaItem
+import com.google.android.exoplayer2.trackselection.DefaultTrackSelector
+import com.google.android.exoplayer2.ui.PlayerView
+import com.google.android.exoplayer2.util.MimeTypes
 
-// Global state to share the chosen aspect ratio with the TV Screen
+// Global states
 val aspectRatioState = MutableStateFlow(16f / 9f)
+val currentVideoUriState = MutableStateFlow<Uri?>(null)
+val exoPlayerState = MutableStateFlow<ExoPlayer?>(null)
 
 class MainActivity : ComponentActivity() {
     private var currentPresentation: CastPresentation? = null
+    private val pickVideoLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        uri?.let {
+            currentVideoUriState.value = it
+            Toast.makeText(this, "Video selected. Playing on TV...", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -34,9 +51,9 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 MainScreen(
                     onOpenCastSettings = {
-                        // Opens the phone's native cast menu to connect to Anycast
                         startActivity(Intent(Settings.ACTION_CAST_SETTINGS))
-                    }
+                    },
+                    onPickVideo = { pickVideoLauncher.launch("video/*") }
                 )
             }
         }
@@ -72,81 +89,145 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        currentPresentation?.releasePlayer()
         currentPresentation?.dismiss()
         currentPresentation = null
     }
 }
 
 @Composable
-fun MainScreen(onOpenCastSettings: () -> Unit) {
+fun MainScreen(
+    onOpenCastSettings: () -> Unit,
+    onPickVideo: () -> Unit
+) {
     var currentRatio by remember { mutableStateOf(16f / 9f) }
 
-    // When the user clicks a button, update the global state sent to the TV
     LaunchedEffect(currentRatio) {
         aspectRatioState.value = currentRatio
     }
+
+    val context = LocalContext.current
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-        Text("Anycast Ratio Controller", style = MaterialTheme.typography.headlineSmall)
-        
-        Spacer(modifier = Modifier.height(48.dp))
+        Text("CastRatio Player", style = MaterialTheme.typography.headlineSmall)
 
         Button(onClick = onOpenCastSettings, modifier = Modifier.fillMaxWidth().height(60.dp)) {
             Text("1. Connect to Anycast")
         }
 
-        Spacer(modifier = Modifier.height(48.dp))
-        Text("2. Set TV Aspect Ratio:", style = MaterialTheme.typography.bodyLarge)
-        Spacer(modifier = Modifier.height(16.dp))
+        Button(
+            onClick = onPickVideo,
+            modifier = Modifier.fillMaxWidth().height(60.dp)
+        ) {
+            Text("2. Pick Video from Storage")
+        }
 
+        Text("3. Set Fallback Aspect Ratio:", style = MaterialTheme.typography.bodyLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = { currentRatio = 16f / 9f }) { Text("16:9") }
             Button(onClick = { currentRatio = 4f / 3f }) { Text("4:3") }
             Button(onClick = { currentRatio = 21f / 9f }) { Text("21:9") }
         }
+
+        Button(
+            onClick = {
+                // Trigger audio track selection (handled in Presentation)
+                Toast.makeText(context, "Audio track selection opens on TV controls", Toast.LENGTH_SHORT).show()
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Select Audio Track")
+        }
     }
 }
 
-// This class draws the UI directly onto the Anycast TV display
 class CastPresentation(context: Context, display: Display) : Presentation(context, display) {
+    private var player: ExoPlayer? = null
+    private var playerView: PlayerView? = null
+
+    fun releasePlayer() {
+        player?.release()
+        player = null
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         val composeView = ComposeView(context).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setContent {
-                val ratio by aspectRatioState.collectAsState()
-                
-                // Black background to hide the unused TV space
+                val videoUri by currentVideoUriState.collectAsState()
+
                 Box(
-                    modifier = Modifier.fillMaxSize().background(Color.Black),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black),
                     contentAlignment = Alignment.Center
                 ) {
-                    // The actual content box resized to the aspect ratio
-                    Box(
-                        modifier = Modifier
-                            .aspectRatio(ratio)
-                            .fillMaxSize()
-                            .background(Color.DarkGray),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "TV Output\nAspect Ratio applied successfully.",
-                            color = Color.White,
-                            textAlign = TextAlign.Center
+                    if (videoUri != null) {
+                        AndroidView(
+                            factory = { ctx ->
+                                val trackSelector = DefaultTrackSelector(ctx)
+                                player = ExoPlayer.Builder(ctx)
+                                    .setTrackSelector(trackSelector)
+                                    .build()
+
+                                PlayerView(ctx).apply {
+                                    playerView = this
+                                    this.player = player
+                                    useController = true  // Full media controls
+                                    hideControllerTimeoutMs = 3000
+
+                                    val mediaItem = MediaItem.Builder()
+                                        .setUri(videoUri)
+                                        .setMimeType(MimeTypes.VIDEO_MP4)
+                                        .build()
+
+                                    player?.setMediaItem(mediaItem)
+                                    player?.prepare()
+                                    player?.playWhenReady = true
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
                         )
+                    } else {
+                        // Fallback
+                        Box(
+                            modifier = Modifier
+                                .aspectRatio(aspectRatioState.collectAsState().value)
+                                .fillMaxSize()
+                                .background(Color.DarkGray),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "CastRatio Player\nPick a video on phone",
+                                color = Color.White,
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     }
                 }
             }
         }
         setContentView(composeView)
+    }
+
+    override fun onStop() {
+        player?.playWhenReady = false
+        super.onStop()
+    }
+
+    override fun onDetachedFromWindow() {
+        releasePlayer()
+        super.onDetachedFromWindow()
     }
 }
