@@ -30,6 +30,7 @@ import com.google.android.exoplayer2.MediaItem
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector
 import com.google.android.exoplayer2.ui.PlayerView
 import com.google.android.exoplayer2.util.MimeTypes
+import kotlinx.coroutines.flow.MutableStateFlow
 
 // Global states
 val aspectRatioState = MutableStateFlow(16f / 9f)
@@ -138,7 +139,6 @@ fun MainScreen(
 
 class CastPresentation(context: Context, display: Display) : Presentation(context, display) {
     private var player: ExoPlayer? = null
-    private var playerView: PlayerView? = null
 
     fun releasePlayer() {
         player?.release()
@@ -171,14 +171,12 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
                                     .build()
 
                                 PlayerView(ctx).apply {
-                                    playerView = this
                                     this.player = player
                                     useController = true
-                                    hideControllerTimeoutMs = 3000
+                                    // hideControllerTimeoutMs removed for compatibility; use default
 
                                     val mediaItem = MediaItem.Builder()
-                                        .setUri(videoUri)
-                                        .setMimeType(MimeTypes.VIDEO_MP4)
+                                        .setUri(videoUri.toString())
                                         .build()
 
                                     player?.setMediaItem(mediaItem)
